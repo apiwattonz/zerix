@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ChunkType, MemoryTier, Summarizer, type ContextChunk } from '../../index.js'
 
 const NOW = 1_700_000_000_000
@@ -260,6 +260,19 @@ describe('Summarizer', () => {
     await expect(summarizer.summarize('some input text')).rejects.toThrow(
       /customFn timed out after 50ms/u
     )
+  })
+
+  it('clears timeout timer when customFn resolves before timeout', async () => {
+    const clearSpy = vi.spyOn(global, 'clearTimeout')
+    const summarizer = new Summarizer({
+      strategy: 'custom',
+      compressionRatio: 3,
+      timeoutMs: 5000,
+      customFn: async () => 'fast result'
+    })
+    await summarizer.summarize('some input text')
+    expect(clearSpy).toHaveBeenCalled()
+    clearSpy.mockRestore()
   })
 
   it('logger=false produces no logging', async () => {

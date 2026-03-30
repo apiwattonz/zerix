@@ -125,12 +125,15 @@ export class Summarizer {
       let customOutput: unknown
       try {
         const timeoutMs = this.config.timeoutMs ?? 5000
-        customOutput = await Promise.race([
-          this.config.customFn(input),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Summarizer customFn timed out after ${timeoutMs}ms`)), timeoutMs)
-          )
-        ])
+        let timer: NodeJS.Timeout
+        const timeoutP = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Summarizer customFn timed out after ${timeoutMs}ms`)), timeoutMs)
+        })
+        try {
+          customOutput = await Promise.race([this.config.customFn(input), timeoutP])
+        } finally {
+          clearTimeout(timer!)
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         throw new Error(`Summarizer customFn threw: ${message}`)
