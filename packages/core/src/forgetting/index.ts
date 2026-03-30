@@ -8,5 +8,6 @@ export type {
 export { Summarizer } from './summarizer.js'
 export type {
   SummarizerConfig,
-  SummarizationStrategy
+  SummarizationStrategy,
+  SummarizerLogFn
 } from './summarizer.js'

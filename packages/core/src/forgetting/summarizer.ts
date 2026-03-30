@@ -1,6 +1,11 @@
 import type { ContextChunk } from '../types/chunk.js'
+import { clamp } from '../utils/math.js'
 
 export type SummarizationStrategy = 'extractive' | 'truncate' | 'custom'
+
+export interface SummarizerLogFn {
+  log: (msg: string) => void
+}
 
 export interface SummarizerConfig {
   /**
@@ -12,6 +17,13 @@ export interface SummarizerConfig {
   strategy: SummarizationStrategy
   /** Optional custom summarization callback for strategy='custom'. */
   customFn?: (input: string | string[]) => string | Promise<string>
+  /**
+   * Optional logger.
+   * - `true`: use console.log
+   * - object with `log` method: use that
+   * - `false` / `undefined`: no logging
+   */
+  logger?: SummarizerLogFn | boolean
 }
 
 const DEFAULT_CONFIG: SummarizerConfig = {
@@ -30,13 +42,6 @@ interface SentenceCandidate {
   position: number
   words: string[]
   score: number
-}
-
-const clamp = (value: number, min: number, max: number): number => {
-  if (!Number.isFinite(value) || Number.isNaN(value)) return min
-  if (value < min) return min
-  if (value > max) return max
-  return value
 }
 
 const countWords = (text: string): number => {
@@ -67,9 +72,7 @@ const splitSentences = (text: string): string[] => {
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
 
-  if (pieces.length > 0) return pieces
-
-  return [cleaned]
+  return pieces.length > 0 ? pieces : [cleaned]
 }
 
 const hasEntitySignals = (text: string): boolean => {
@@ -89,7 +92,8 @@ export class Summarizer {
     this.config = {
       compressionRatio,
       strategy,
-      customFn: config.customFn
+      customFn: config.customFn,
+      logger: config.logger
     }
   }
 
@@ -105,29 +109,43 @@ export class Summarizer {
       if (!this.config.customFn) {
         throw new Error('Summarizer custom strategy requires customFn')
       }
-      const customOutput = await this.config.customFn(input)
-      return this.ensureString(customOutput)
+      let customOutput: unknown
+      try {
+        customOutput = await this.config.customFn(input)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Summarizer customFn threw: ${message}`)
+      }
+      const result = this.ensureString(customOutput)
+      this.log(normalized.join('\n'), result)
+      return result
     }
 
     const source = normalized.join('\n')
     const sourceWordCount = countWords(source)
 
     if (sourceWordCount <= 12 || this.config.compressionRatio <= 1) {
+      this.log(source, source)
       return source
     }
 
     const targetWords = Math.max(1, Math.floor(sourceWordCount / this.config.compressionRatio))
 
     if (this.config.strategy === 'truncate') {
-      return this.truncate(source, targetWords)
+      const result = this.truncate(source, targetWords)
+      this.log(source, result)
+      return result
     }
 
     const extractive = this.extractiveSummary(source, targetWords)
     if (extractive.trim().length > 0) {
+      this.log(source, extractive)
       return extractive
     }
 
-    return this.truncate(source, targetWords)
+    const result = this.truncate(source, targetWords)
+    this.log(source, result)
+    return result
   }
 
   async summarizeChunks(chunks: ContextChunk[]): Promise<string> {
@@ -139,6 +157,24 @@ export class Summarizer {
       .filter((text) => text.length > 0)
 
     return this.summarize(chunkContents)
+  }
+
+  private log(input: string, output: string): void {
+    if (!this.config.logger) return
+
+    const logFn =
+      this.config.logger === true
+        ? (msg: string) => console.log(msg)
+        : (this.config.logger as SummarizerLogFn).log
+
+    const inputWords = countWords(input)
+    const outputWords = countWords(output)
+    const achieved = outputWords > 0 ? inputWords / outputWords : 0
+    const ratio = Math.round(achieved * 100) / 100
+
+    logFn(
+      `[Summarizer] strategy=${this.config.strategy} inputWords=${inputWords} outputWords=${outputWords} compressionRatio=${ratio}`
+    )
   }
 
   private normalizeInput(input: string | string[]): string[] {

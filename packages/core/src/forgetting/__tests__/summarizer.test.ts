@@ -129,4 +129,137 @@ describe('Summarizer', () => {
       /customFn/u
     )
   })
+
+  it('compressionRatio <= 1 returns original text unchanged', async () => {
+    const summarizer = new Summarizer({ compressionRatio: 0.5, strategy: 'extractive' })
+    const input =
+      'Acme Corp planned the Q2 launch with Engineering, Product, and Sales. The team agreed on milestones and risk controls for the upcoming release.'
+    const output = await summarizer.summarize(input)
+    expect(output).toBe(input)
+  })
+
+  it('compressionRatio is clamped: 100 -> 20, -5 -> 1', () => {
+    const high = new Summarizer({ compressionRatio: 100, strategy: 'extractive' })
+    expect(high.getConfig().compressionRatio).toBe(20)
+
+    const low = new Summarizer({ compressionRatio: -5, strategy: 'extractive' })
+    expect(low.getConfig().compressionRatio).toBe(1)
+  })
+
+  it('customFn that throws produces a descriptive error', async () => {
+    const summarizer = new Summarizer({
+      strategy: 'custom',
+      compressionRatio: 3,
+      customFn: () => {
+        throw new Error('LLM quota exceeded')
+      }
+    })
+    await expect(summarizer.summarize('some input text')).rejects.toThrow(
+      /Summarizer customFn threw: LLM quota exceeded/u
+    )
+  })
+
+  it('customFn that returns a number (non-string) throws', async () => {
+    const summarizer = new Summarizer({
+      strategy: 'custom',
+      compressionRatio: 3,
+      customFn: () => 42 as unknown as string
+    })
+    await expect(summarizer.summarize('some input text')).rejects.toThrow(
+      /customFn must return a string/u
+    )
+  })
+
+  it('summarizeChunks([]) returns empty string', async () => {
+    const summarizer = new Summarizer({ strategy: 'extractive', compressionRatio: 3 })
+    const output = await summarizer.summarizeChunks([])
+    expect(output).toBe('')
+  })
+
+  it('summarize([]) returns empty string', async () => {
+    const summarizer = new Summarizer({ strategy: 'extractive', compressionRatio: 3 })
+    const output = await summarizer.summarize([])
+    expect(output).toBe('')
+  })
+
+  it('summarize with empty strings in array filters them and summarizes correctly', async () => {
+    const summarizer = new Summarizer({ strategy: 'extractive', compressionRatio: 1 })
+    const output = await summarizer.summarize(['hello', '', 'world'])
+    expect(output).toContain('hello')
+    expect(output).toContain('world')
+  })
+
+  it('extractive output preserves original sentence ordering', async () => {
+    const summarizer = new Summarizer({ strategy: 'extractive', compressionRatio: 2 })
+    const input = [
+      'Alpha team started the investigation at HQ on Monday morning.',
+      'Beta group confirmed the root cause was a misconfigured DNS record.',
+      'Decision: rollback deployment to v2.3.1 immediately.',
+      'Gamma division prepared the postmortem documentation for stakeholders.'
+    ].join(' ')
+
+    const output = await summarizer.summarize(input)
+    const sentences = output.split(/(?<=[.!?])\s+/u)
+
+    // Each selected sentence should appear in the same relative order as the input
+    for (let i = 1; i < sentences.length; i++) {
+      const prevIdx = input.indexOf(sentences[i - 1]!)
+      const currIdx = input.indexOf(sentences[i]!)
+      if (prevIdx !== -1 && currIdx !== -1) {
+        expect(prevIdx).toBeLessThan(currIdx)
+      }
+    }
+  })
+
+  it('logs strategy, input/output word counts, and compression ratio', async () => {
+    const messages: string[] = []
+    const summarizer = new Summarizer({
+      strategy: 'extractive',
+      compressionRatio: 3,
+      logger: { log: (msg: string) => messages.push(msg) }
+    })
+
+    const input =
+      'Acme Corp planned the Q2 launch with Engineering, Product, and Sales in Bangkok. The team agreed on milestones and risk controls for the project release.'
+    await summarizer.summarize(input)
+
+    expect(messages.length).toBe(1)
+    expect(messages[0]).toContain('strategy=extractive')
+    expect(messages[0]).toContain('inputWords=')
+    expect(messages[0]).toContain('outputWords=')
+    expect(messages[0]).toContain('compressionRatio=')
+  })
+
+  it('logger=true uses console.log', async () => {
+    const logged: string[] = []
+    const origLog = console.log
+    console.log = (msg: string) => logged.push(msg)
+    try {
+      const summarizer = new Summarizer({
+        strategy: 'truncate',
+        compressionRatio: 3,
+        logger: true
+      })
+      await summarizer.summarize(
+        'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen'
+      )
+      expect(logged.length).toBe(1)
+      expect(logged[0]).toContain('strategy=truncate')
+    } finally {
+      console.log = origLog
+    }
+  })
+
+  it('logger=false produces no logging', async () => {
+    const summarizer = new Summarizer({
+      strategy: 'extractive',
+      compressionRatio: 3,
+      logger: false
+    })
+    // Should not throw; no way to observe absence of logging other than no error
+    const output = await summarizer.summarize(
+      'Acme Corp planned the Q2 launch with Engineering, Product, and Sales in Bangkok. The team agreed on milestones.'
+    )
+    expect(output.length).toBeGreaterThan(0)
+  })
 })
