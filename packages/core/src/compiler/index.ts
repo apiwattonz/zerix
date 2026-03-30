@@ -18,3 +18,5 @@ export {
 export type { ScoringConfig } from './scorer.js'
 export type { BudgetConfig, BudgetReport } from './budget.js'
 export type { Message, IntakeParserConfig, SplitMetadata } from './types.js'
+export { ContextAssembler } from './assembler.js'
+export type { AssemblerConfig, AssemblerLogFn } from './assembler.js'
