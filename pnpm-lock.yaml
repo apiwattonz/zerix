@@ -37,11 +37,7 @@ importers:
 
   packages/observability: {}
 
-  packages/sdk:
-    dependencies:
-      '@zerix/core':
-        specifier: workspace:*
-        version: link:../core
+  packages/sdk: {}
 
 packages:
 
