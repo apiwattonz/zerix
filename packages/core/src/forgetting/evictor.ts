@@ -1,6 +1,7 @@
 import { ChunkType, MemoryTier } from '../types/enums.js'
 import type { ContextChunk } from '../types/chunk.js'
 import { clamp } from '../utils/math.js'
+import { countTokens } from '../compiler/tokenizer.js'
 import { Summarizer } from './summarizer.js'
 
 export interface EvictorConfig {
@@ -8,6 +9,10 @@ export interface EvictorConfig {
   triggerUtilization: number
   /** Fraction of current tokens to evict when triggered. */
   evictFraction: number
+  /** Optional custom Summarizer instance. Defaults to an internal extractive summarizer. */
+  summarizer?: Summarizer
+  /** Clock function for timestamps. Defaults to Date.now. Override in tests for determinism. */
+  now?: () => number
 }
 
 export interface EvictionEvent {
@@ -41,13 +46,16 @@ const DEFAULT_CONFIG: EvictorConfig = {
 export class Evictor {
   private readonly config: EvictorConfig
   private readonly evictionLog: EvictionEvent[] = []
-  private readonly summarizer = new Summarizer({ compressionRatio: 3, strategy: 'extractive' })
+  private readonly summarizer: Summarizer
+  private readonly now: () => number
 
   constructor(config: Partial<EvictorConfig> = {}) {
     this.config = {
       triggerUtilization: clamp(config.triggerUtilization ?? DEFAULT_CONFIG.triggerUtilization, 0, 1),
       evictFraction: clamp(config.evictFraction ?? DEFAULT_CONFIG.evictFraction, 0, 1)
     }
+    this.summarizer = config.summarizer ?? new Summarizer({ compressionRatio: 3, strategy: 'extractive' })
+    this.now = config.now ?? Date.now
   }
 
   getConfig(): EvictorConfig {
@@ -115,15 +123,16 @@ export class Evictor {
 
     const summaryContent = await this.summarizer.summarizeChunks(selected)
 
+    const ts = this.now()
     const summaryChunk: ContextChunk = {
-      id: `summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: `summary-${ts}-${Math.random().toString(36).slice(2, 8)}`,
       content: summaryContent,
-      tokens: summaryContent.trim().length === 0 ? 0 : summaryContent.trim().split(/\s+/).length,
+      tokens: countTokens(summaryContent),
       type: ChunkType.OBSERVATION,
       score: 1,
       tier: MemoryTier.L2_RAM,
-      createdAt: Date.now(),
-      accessedAt: Date.now(),
+      createdAt: ts,
+      accessedAt: ts,
       accessCount: 0,
       ttl: null,
       metadata: {
@@ -153,7 +162,7 @@ export class Evictor {
     const utilizationAfter = safeCapacity > 0 ? tokensAfter / safeCapacity : 0
 
     const event: EvictionEvent = {
-      timestamp: Date.now(),
+      timestamp: this.now(),
       triggerUtilization: this.config.triggerUtilization,
       utilizationBefore,
       utilizationAfter,

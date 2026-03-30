@@ -3,6 +3,7 @@ import {
   ChunkType,
   Evictor,
   MemoryTier,
+  Summarizer,
   type ContextChunk
 } from '../../index.js'
 
@@ -161,6 +162,45 @@ describe('Evictor', () => {
     expect(strictResult.targetEvictTokens).toBe(10)
     expect(aggressiveResult.targetEvictTokens).toBe(50)
     expect(aggressiveResult.evictedTokens).toBeGreaterThan(strictResult.evictedTokens)
+  })
+
+  it('uses injectable now() for deterministic timestamps', async () => {
+    const fixedTime = 1_600_000_000_000
+    const evictor = new Evictor({
+      triggerUtilization: 0.3,
+      evictFraction: 0.5,
+      now: () => fixedTime
+    })
+    const chunks = [
+      createChunk({ id: 'a', score: 0.1, tokens: 30, content: 'Some evictable content here.' }),
+      createChunk({ id: 'b', score: 0.9, tokens: 30, content: 'Keep this.' })
+    ]
+
+    const result = await evictor.run(chunks, 50)
+
+    expect(result.summaryChunk?.createdAt).toBe(fixedTime)
+    expect(result.summaryChunk?.accessedAt).toBe(fixedTime)
+    expect(result.summaryChunk?.id).toMatch(new RegExp(`^summary-${fixedTime}-`))
+    const log = evictor.getEvictionLog()
+    expect(log[0]?.timestamp).toBe(fixedTime)
+  })
+
+  it('accepts a custom Summarizer instance', async () => {
+    const customSummarizer = new Summarizer({ compressionRatio: 5, strategy: 'truncate' })
+    const evictor = new Evictor({
+      triggerUtilization: 0.3,
+      evictFraction: 0.5,
+      summarizer: customSummarizer
+    })
+    const chunks = [
+      createChunk({ id: 'a', score: 0.1, tokens: 30, content: 'First chunk content for custom summarizer test.' }),
+      createChunk({ id: 'b', score: 0.9, tokens: 30, content: 'Keep this chunk.' })
+    ]
+
+    const result = await evictor.run(chunks, 50)
+
+    expect(result.summaryChunk).not.toBeNull()
+    expect(result.summaryChunk!.content.length).toBeGreaterThan(0)
   })
 
   it('handles edge cases: empty memory and all protected chunks', async () => {

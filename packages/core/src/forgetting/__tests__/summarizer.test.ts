@@ -250,6 +250,18 @@ describe('Summarizer', () => {
     }
   })
 
+  it('customFn that exceeds timeoutMs rejects with descriptive error', async () => {
+    const summarizer = new Summarizer({
+      strategy: 'custom',
+      compressionRatio: 3,
+      timeoutMs: 50,
+      customFn: () => new Promise((resolve) => setTimeout(() => resolve('late'), 200))
+    })
+    await expect(summarizer.summarize('some input text')).rejects.toThrow(
+      /customFn timed out after 50ms/u
+    )
+  })
+
   it('logger=false produces no logging', async () => {
     const summarizer = new Summarizer({
       strategy: 'extractive',

@@ -18,6 +18,11 @@ export interface SummarizerConfig {
   /** Optional custom summarization callback for strategy='custom'. */
   customFn?: (input: string | string[]) => string | Promise<string>
   /**
+   * Timeout in milliseconds for customFn. Defaults to 5000.
+   * If customFn takes longer than this, it rejects with a descriptive error.
+   */
+  timeoutMs?: number
+  /**
    * Optional logger.
    * - `true`: use console.log
    * - object with `log` method: use that
@@ -44,10 +49,12 @@ interface SentenceCandidate {
   score: number
 }
 
+const splitWords = (text: string): string[] => text.trim().split(/\s+/u).filter(Boolean)
+
 const countWords = (text: string): number => {
   const trimmed = text.trim()
   if (trimmed.length === 0) return 0
-  return trimmed.split(/\s+/u).filter(Boolean).length
+  return splitWords(text).length
 }
 
 const tokenize = (text: string): string[] => {
@@ -82,6 +89,11 @@ const hasEntitySignals = (text: string): boolean => {
   return hasCapitalized || hasAcronym || hasNumber
 }
 
+/**
+ * Lightweight, local-only text summarizer designed for context-window-sized inputs
+ * (typically up to ~200k tokens). Not intended for corpus-scale or streaming workloads.
+ * For inputs exceeding a single context window, pre-chunk externally before calling summarize().
+ */
 export class Summarizer {
   private readonly config: SummarizerConfig
 
@@ -93,6 +105,7 @@ export class Summarizer {
       compressionRatio,
       strategy,
       customFn: config.customFn,
+      timeoutMs: config.timeoutMs ?? 5000,
       logger: config.logger
     }
   }
@@ -111,7 +124,13 @@ export class Summarizer {
       }
       let customOutput: unknown
       try {
-        customOutput = await this.config.customFn(input)
+        const timeoutMs = this.config.timeoutMs ?? 5000
+        customOutput = await Promise.race([
+          this.config.customFn(input),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Summarizer customFn timed out after ${timeoutMs}ms`)), timeoutMs)
+          )
+        ])
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         throw new Error(`Summarizer customFn threw: ${message}`)
@@ -196,7 +215,7 @@ export class Summarizer {
   }
 
   private truncate(text: string, targetWords: number): string {
-    const words = text.trim().split(/\s+/u).filter(Boolean)
+    const words = splitWords(text)
     if (words.length <= targetWords) return text.trim()
     const head = words.slice(0, targetWords).join(' ').trim()
     return `${head} ...`
