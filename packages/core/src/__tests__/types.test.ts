@@ -62,7 +62,8 @@ describe('core types and enums', () => {
         sessionSummary: 600,
         toolResults: 800,
         longTermMemory: 400,
-        sharedContext: 200
+        sharedContext: 200,
+        reserved: 0
       }
     }
 

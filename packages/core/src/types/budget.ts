@@ -26,6 +26,8 @@ export interface DynamicBudgetZone {
   longTermMemory: number
   /** Shared cross-agent context allocation. */
   sharedContext: number
+  /** Reserved dynamic headroom allocation. */
+  reserved: number
 }
 
 /**
@@ -44,4 +46,40 @@ export interface BudgetZone {
 export interface TokenBudget extends BudgetZone {
   /** Total available tokens. */
   total: number
+}
+
+/**
+ * Percentage-based configuration for token budget allocation.
+ */
+export interface BudgetConfig {
+  /** Stable zone share of total tokens (default 0.15). */
+  stablePercent?: number
+  /** Dynamic zone share of total tokens (default 0.85). */
+  dynamicPercent?: number
+  /** Stable-zone internal percentage split, total must equal 1. */
+  stableBreakdown?: StableBudgetZone
+  /** Dynamic-zone internal percentage split, total must equal 1. */
+  dynamicBreakdown?: DynamicBudgetZone
+}
+
+/**
+ * Usage report per category and in aggregate.
+ */
+export interface BudgetReport {
+  categories: Record<
+    string,
+    {
+      allocated: number
+      used: number
+      remaining: number
+    }
+  >
+  total: {
+    allocated: number
+    used: number
+    remaining: number
+    utilization: number
+  }
+  /** Categories with usage that exceeds allocated budget. */
+  overBudget: string[]
 }
