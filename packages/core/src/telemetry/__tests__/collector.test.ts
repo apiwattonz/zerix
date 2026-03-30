@@ -92,21 +92,23 @@ describe('TelemetryCollector', () => {
 
     it('sets up interval flush when flushIntervalMs > 0', async () => {
       vi.useFakeTimers()
-      const onFlush = vi.fn()
-      const c = new TelemetryCollector({
-        enabled: true,
-        flushIntervalMs: 100,
-        now: () => NOW,
-        onFlush,
-      })
-      c.start()
-      c.record(createEvent())
-      vi.advanceTimersByTime(100)
-      // Give the async flush a tick
-      await vi.runAllTimersAsync()
-      expect(onFlush).toHaveBeenCalled()
-      await c.stop()
-      vi.useRealTimers()
+      try {
+        const onFlush = vi.fn()
+        const c = new TelemetryCollector({
+          enabled: true,
+          flushIntervalMs: 100,
+          now: () => NOW,
+          onFlush,
+        })
+        c.start()
+        c.record(createEvent())
+        // advanceTimersByTimeAsync triggers the interval AND drains async flush
+        await vi.advanceTimersByTimeAsync(100)
+        expect(onFlush).toHaveBeenCalled()
+        await c.stop()
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
