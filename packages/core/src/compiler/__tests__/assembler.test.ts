@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ContextAssembler, type AssemblerConfig } from '../assembler.js'
 import { createBudget } from '../budget.js'
 import { MemoryTier } from '../../types/enums.js'
@@ -218,7 +218,7 @@ describe('ContextAssembler', () => {
     expect(result.context).toBe('')
     expect(result.stats.memoryHits).toBe(0)
     expect(result.stats.tokensSaved).toBe(0)
-    expect(result.stats.compressionRatio).toBe(0)
+    expect(result.stats.compressionRatio).toBe(1.0)
   })
 
   // ---------------------------------------------------------------
@@ -482,5 +482,102 @@ describe('ContextAssembler', () => {
     )
 
     expect(result.stats.costSaved).toBe(0)
+  })
+
+  // ---------------------------------------------------------------
+  // 21. logger: true uses console.log
+  // ---------------------------------------------------------------
+  it('logger: true routes messages through console.log', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const assembler = new ContextAssembler({
+        budget: createBudget(500),
+        logger: true,
+        now: () => NOW
+      })
+      assembler.buildFromChunks(
+        { l0: [createChunk({ id: 'r1', content: 'test', tokens: 5, tier: MemoryTier.L0_REGISTER })] },
+        ''
+      )
+      expect(spy).toHaveBeenCalled()
+      expect(spy.mock.calls.some((args) => String(args[0]).includes('[assembler]'))).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // ---------------------------------------------------------------
+  // 22. logger: false produces no output
+  // ---------------------------------------------------------------
+  it('logger: false produces no log output', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const assembler = new ContextAssembler({
+        budget: createBudget(500),
+        logger: false,
+        now: () => NOW
+      })
+      assembler.buildFromChunks(
+        { l0: [createChunk({ id: 'r1', content: 'test', tokens: 5, tier: MemoryTier.L0_REGISTER })] },
+        ''
+      )
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // ---------------------------------------------------------------
+  // 23. Negative budget throws
+  // ---------------------------------------------------------------
+  it('throws descriptive error for negative budget', () => {
+    const negativeBudget = { ...createBudget(100), total: -100 }
+    expect(() => new ContextAssembler({ budget: negativeBudget, now: () => NOW })).toThrow(/Invalid budget/)
+  })
+
+  // ---------------------------------------------------------------
+  // 24. NaN budget throws
+  // ---------------------------------------------------------------
+  it('throws descriptive error for NaN budget', () => {
+    const nanBudget = { ...createBudget(100), total: NaN }
+    expect(() => new ContextAssembler({ budget: nanBudget, now: () => NOW })).toThrow(/Invalid budget/)
+  })
+
+  // ---------------------------------------------------------------
+  // 25. costPerToken with tokensSaved produces correct costSaved
+  // ---------------------------------------------------------------
+  it('costSaved equals tokensSaved * costPerToken', () => {
+    const assembler = new ContextAssembler({
+      budget: createBudget(200),
+      costPerToken: 0.005,
+      now: () => NOW
+    })
+
+    const result = assembler.buildFromChunks(
+      {
+        dynamic: [
+          createChunk({ id: 'd1', content: 'kept data', tokens: 20, tier: MemoryTier.L2_RAM }),
+          createChunk({ id: 'd2', content: 'extra filler padding to be dropped', tokens: 200, tier: MemoryTier.L2_RAM })
+        ]
+      },
+      'kept data'
+    )
+
+    expect(result.stats.tokensSaved).toBeGreaterThan(0)
+    expect(result.stats.costSaved).toBe(result.stats.tokensSaved * 0.005)
+  })
+
+  // ---------------------------------------------------------------
+  // 26. buildFromChunks with undefined sources
+  // ---------------------------------------------------------------
+  it('buildFromChunks handles undefined source arrays gracefully', () => {
+    const assembler = new ContextAssembler(makeConfig(500))
+    const result = assembler.buildFromChunks(
+      { l0: undefined, l1: undefined, dynamic: undefined },
+      'test'
+    )
+
+    expect(result.context).toBe('')
+    expect(result.stats.memoryHits).toBe(0)
   })
 })

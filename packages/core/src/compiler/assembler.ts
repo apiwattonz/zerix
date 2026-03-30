@@ -137,6 +137,12 @@ function buildTierUtilization(
  * 3. Scored dynamic content — ranked by the Scorer, packed into the dynamic zone
  *
  * Zone boundaries default to stable 15% / dynamic 85% as defined by the TokenBudget.
+ *
+ * **L3/L4 tiers (SSD/Archive):** These tiers are eviction-only destinations managed
+ * by the Evictor. They are never read during assembly — the assembler only pulls from
+ * L0 (registers), L1 (cache), and L2 (RAM). Consequently, L3 and L4 always show 0
+ * in tierUtilization. They are included in the utilization record for completeness
+ * so that callers have a consistent key set across all MemoryTier values.
  */
 export class ContextAssembler {
   private readonly config: AssemblerConfig
@@ -144,6 +150,10 @@ export class ContextAssembler {
   private readonly now: () => number
 
   public constructor(config: AssemblerConfig) {
+    const total = config.budget.total
+    if (total < 0 || Number.isNaN(total)) {
+      throw new Error(`Invalid budget: total must be a non-negative number, got ${total}`)
+    }
     this.config = config
     this.logger = resolveLogger(config.logger)
     this.now = config.now ?? Date.now
@@ -167,17 +177,28 @@ export class ContextAssembler {
 
     this.logger?.log(`starting assembly with ${budget.total} total tokens`)
 
+    // --- Phase 0: Validate memory reads ---
+    const validateChunks = (chunks: ContextChunk[], label: string): ContextChunk[] => {
+      return chunks.filter((c) => {
+        if (!c.id || c.content == null) {
+          this.logger?.log(`skipping malformed chunk in ${label}: missing id or content`)
+          return false
+        }
+        return true
+      })
+    }
+
     // --- Phase 1: Stable zone (L0 registers + L1 cache) ---
     const stableMax = budget.stableZone.systemPrompt + budget.stableZone.userProfile + budget.stableZone.taskDef
     this.logger?.log(`stable zone budget: ${stableMax} tokens`)
 
-    const l0Chunks = memory.read(MemoryTier.L0_REGISTER)
+    const l0Chunks = validateChunks(memory.read(MemoryTier.L0_REGISTER), 'L0')
     const l0Selected = selectWithinBudget(l0Chunks, stableMax)
     const l0Tokens = sumTokens(l0Selected)
     this.logger?.log(`L0 registers: ${l0Selected.length} chunks, ${l0Tokens} tokens`)
 
     const l1Budget = stableMax - l0Tokens
-    const l1Chunks = memory.read(MemoryTier.L1_CACHE)
+    const l1Chunks = validateChunks(memory.read(MemoryTier.L1_CACHE), 'L1')
     const l1Selected = selectWithinBudget(l1Chunks, l1Budget)
     const l1Tokens = sumTokens(l1Selected)
     this.logger?.log(`L1 cache: ${l1Selected.length} chunks, ${l1Tokens} tokens`)
@@ -193,11 +214,16 @@ export class ContextAssembler {
       budget.dynamicZone.reserved
     this.logger?.log(`dynamic zone budget: ${dynamicMax} tokens`)
 
-    const l2Chunks = memory.read(MemoryTier.L2_RAM)
-    const allDynamic = [...l2Chunks]
+    const l2Chunks = validateChunks(memory.read(MemoryTier.L2_RAM), 'L2')
 
     // Score and rank dynamic content
-    const scored = scoreChunks(allDynamic, query, this.config.scoringConfig)
+    let scored: ContextChunk[]
+    try {
+      scored = scoreChunks(l2Chunks, query, this.config.scoringConfig)
+    } catch (err) {
+      this.logger?.log(`scorer failed, using unsorted chunks: ${err instanceof Error ? err.message : String(err)}`)
+      scored = l2Chunks.map((c) => ({ ...c, score: 0 }))
+    }
     const dynamicSelected = selectWithinBudget(scored, dynamicMax)
     const dynamicTokens = sumTokens(dynamicSelected)
     this.logger?.log(`dynamic content: ${dynamicSelected.length}/${scored.length} chunks, ${dynamicTokens} tokens`)
@@ -229,7 +255,7 @@ export class ContextAssembler {
     const outputTokens = l0Tokens + l1Tokens + dynamicTokens
     const tokensSaved = Math.max(0, inputTokens - outputTokens)
     const costPerToken = this.config.costPerToken ?? 0
-    const compressionRatio = outputTokens > 0 ? inputTokens / outputTokens : 0
+    const compressionRatio = outputTokens > 0 ? inputTokens / outputTokens : 1.0
 
     const memoryHits = l0Selected.length + l1Selected.length + dynamicSelected.length
     const latencyMs = this.now() - startMs
@@ -255,6 +281,9 @@ export class ContextAssembler {
   /**
    * Assemble context directly from pre-built chunk arrays instead of a MemoryStore.
    * Useful when chunks are already available without a full memory backend.
+   *
+   * Internally creates a read-only MemoryStore adapter. The adapter's write, delete,
+   * clear, promote, and demote methods are no-ops — only `read()` is functional.
    *
    * @param sources - Object with optional l0, l1, and dynamic chunk arrays.
    * @param query - Query string for relevance scoring of dynamic content.
@@ -308,7 +337,7 @@ export class ContextAssembler {
         costSaved: 0,
         memoryHits: 0,
         latencyMs: this.now() - startMs,
-        compressionRatio: 0,
+        compressionRatio: 1.0,
         tierUtilization: {
           [MemoryTier.L0_REGISTER]: 0,
           [MemoryTier.L1_CACHE]: 0,
