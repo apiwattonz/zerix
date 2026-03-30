@@ -1,7 +1,2 @@
-export type Placeholder = {
-  message: string
-}
-
-export const corePlaceholder = (): Placeholder => ({
-  message: 'core placeholder'
-})
+export * from './telemetry/index.js'
+export * from './types/index.js'
