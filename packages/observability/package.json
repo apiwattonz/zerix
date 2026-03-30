@@ -1,0 +1,14 @@
+{
+  "name": "@zerix/observability",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'skip lint'",
+    "test": "vitest run"
+  }
+}
